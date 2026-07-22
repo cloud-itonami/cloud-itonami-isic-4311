@@ -40,7 +40,23 @@
   transposed into national law per member state (here: Germany's
   Gefahrstoffverordnung / TRGS 519), so the citation lists BOTH the EU
   directive and its German transposition rather than inventing an EU
-  country code."
+  country code.
+
+  GBR (United Kingdom of Great Britain and Northern Ireland, the
+  ISO-3166 alpha-3 country the code actually names) has its OWN honest
+  territorial-scope caveat, verified directly against legislation.gov.uk
+  section text: the Health and Safety at Work etc. Act 1974 (the
+  enabling Act for both CDM 2015 and the Control of Asbestos Regulations
+  2012) does NOT extend to Northern Ireland (s.84(1)); the Building Act
+  1984 (the s.80 local-authority demolition-notice statute) does not
+  extend to Scotland OR Northern Ireland either (s.135(2)). This
+  catalog's GBR entry is therefore, precisely, Great Britain (England/
+  Scotland/Wales) for the CDM 2015/asbestos citations and England-and-
+  Wales-only for the Building Act 1984 citation -- Scotland and Northern
+  Ireland have their own separate building-control and (for Northern
+  Ireland) separate health-and-safety regimes not surveyed in this R0
+  catalog. This is reported honestly rather than glossed over, the same
+  discipline the DEU EU-proxy caveat above established."
   )
 
 (def catalog
@@ -89,7 +105,19 @@
           :demolition-notification-provenance "https://www.dibt.de/en"
           :permit-basis "Landesbauordnung（州建築法、標準法として Musterbauordnung MBO 参照）-- Abbruchgenehmigung/Abbruchanzeige（解体許可／届出）が解体開始前に必要。建築法制は連邦ではなく州（Länder）の権限。"
           :permit-provenance "https://www.dibt.de/en"
-          :permit-note "German demolition permits/notifications are governed by the state Landesbauordnungen, not federal law -- the same honest state-vs-federal layering cloud-itonami-isic-4211 uses for its own DEU building-permit citation."}})
+          :permit-note "German demolition permits/notifications are governed by the state Landesbauordnungen, not federal law -- the same honest state-vs-federal layering cloud-itonami-isic-4211 uses for its own DEU building-permit citation."}
+   "GBR" {:name "United Kingdom (see ns docstring for the GBR territorial-scope caveat -- Great Britain for CDM 2015/asbestos law, England & Wales only for the Building Act 1984 demolition notice)"
+          :owner-authority "Health and Safety Executive (HSE), regulating under the Health and Safety at Work etc. Act 1974 (CDM 2015 / Control of Asbestos Regulations 2012 -- Great Britain only, s.84(1) HSWA 1974 excludes Northern Ireland) / Local authority building control, under the Building Act 1984 Part VI (England and Wales only, s.135(2) excludes Scotland and Northern Ireland)"
+          :hazmat-survey-basis "The Control of Asbestos Regulations 2012 (SI 2012/632) reg.5 (Identification of the presence of asbestos) -- an employer must not undertake work in demolition, maintenance or any other work which exposes or is liable to expose employees to asbestos unless a suitable and sufficient assessment as to whether asbestos is present has been carried out, or, if there is doubt, asbestos is assumed present"
+          :hazmat-survey-provenance "https://www.legislation.gov.uk/uksi/2012/632/regulation/5/made"
+          :demolition-notification-basis "The Construction (Design and Management) Regulations 2015 (SI 2015/51) reg.20 (Demolition or dismantling) -- the demolition or dismantling of a structure must be planned and carried out to prevent (or reduce to as low a level as is reasonably practicable) danger, and the arrangements for carrying it out must be recorded in writing before the demolition or dismantling work begins; HSE's own guidance on this (Legal series L153, 'Managing health and safety in construction') explains CDM 2015 in detail. Supplemented, for England and Wales, by the Building Act 1984 s.80 local-authority demolition notice -- see :permit-basis."
+          :demolition-notification-provenance "https://www.legislation.gov.uk/uksi/2015/51/regulation/20/made"
+          :threshold-model :qualitative
+          :notification-lead-days nil
+          :threshold-note "CDM 2015 Regulation 20(2)は解体・解体作業開始前に作業方法を書面で記録する義務を課すのみで、日本の暦日7日・米国の10営業日のような固定日数の届出リードタイムは法定していない。Building Act 1984 第80条は地方自治体（イングランド及びウェールズのみ、スコットランド・北アイルランドは適用外）への解体届出義務を課すが、同法第81条(4)(a)の『relevant period』（原則6週間、legislation.gov.uk条文で確認済み）は地方自治体がそれより早く第81条通知を出せば満たされる条件付きの上限であり、日本・米国のような無条件の最低リードタイム（floor）ではない -- ここで数値を創作しない。"
+          :permit-basis "Building Act 1984 s.80 (Notice to local authority of intended demolition, England and Wales only) -- no person may begin a demolition to which the section applies unless notice of intention has been given to the local authority, subject to exceptions (an internal part of an occupied building intended to remain occupied; a building of not more than 1750 cubic feet by external measurement; certain agricultural buildings not contiguous to another building). Section 81(4)(a) sets the default 'relevant period' at six weeks from the s.80 notice (or such longer period as the notice-giver allows in writing), within which the local authority may instead serve its own s.81 notice specifying required works."
+          :permit-provenance "https://www.legislation.gov.uk/ukpga/1984/55/section/80"
+          :permit-note "The Building Act 1984 applies to England and Wales only (s.135(2) -- verified directly against the section text); Scotland and Northern Ireland have their own separate building-control regimes not surveyed in this R0 catalog -- the same honest jurisdiction-scoping this catalog's DEU entry and cloud-itonami-isic-4211 use for their own permit citations. `:permit-basis`/`:permit-provenance` here point at the SAME Building Act 1984 s.80 already cited in `:demolition-notification-basis` (both facets -- 'give notice' and 'the local-authority process that follows' -- come from one statute), mirroring how the DEU entry above cites its own Landesbauordnung for both fields."}})
 
 (defn spec-basis
   "The jurisdiction's requirement map, or nil -- nil means NO spec-basis,

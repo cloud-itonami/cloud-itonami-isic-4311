@@ -16,6 +16,12 @@
   (is (= :qualitative (:threshold-model (facts/spec-basis "DEU"))))
   (is (nil? (:notification-lead-days (facts/spec-basis "DEU")))))
 
+(deftest gbr-has-a-spec-basis-and-is-honestly-qualitative-not-fabricated
+  (is (some? (facts/spec-basis "GBR")))
+  (is (string? (:hazmat-survey-provenance (facts/spec-basis "GBR"))))
+  (is (= :qualitative (:threshold-model (facts/spec-basis "GBR"))))
+  (is (nil? (:notification-lead-days (facts/spec-basis "GBR")))))
+
 (deftest unknown-jurisdiction-has-no-fabricated-spec-basis
   (is (nil? (facts/spec-basis "ATL"))))
 
@@ -24,6 +30,11 @@
     (is (= 2 (:covered report)))
     (is (= ["ATL"] (:missing-jurisdictions report)))
     (is (= ["JPN" "USA"] (:covered-jurisdictions report)))))
+
+(deftest default-coverage-now-includes-gbr-as-the-4th-catalog-entry
+  (let [report (facts/coverage)]
+    (is (= 4 (:covered report)))
+    (is (= ["DEU" "GBR" "JPN" "USA"] (:covered-jurisdictions report)))))
 
 ;; ----------------------------- notification-lead-insufficient? -----------------------------
 
@@ -39,6 +50,10 @@
 (deftest deu-never-gets-a-fabricated-true-false
   (is (= :qualitative (facts/notification-lead-insufficient? "DEU" {:notification-lead-days-actual 100})))
   (is (= :qualitative (facts/notification-lead-insufficient? "DEU" {:notification-lead-days-actual 0}))))
+
+(deftest gbr-never-gets-a-fabricated-true-false
+  (is (= :qualitative (facts/notification-lead-insufficient? "GBR" {:notification-lead-days-actual 100})))
+  (is (= :qualitative (facts/notification-lead-insufficient? "GBR" {:notification-lead-days-actual 0}))))
 
 (deftest unknown-jurisdiction-returns-nil-not-a-guess
   (is (nil? (facts/notification-lead-insufficient? "ATL" {:notification-lead-days-actual 100}))))
@@ -68,6 +83,18 @@
     (is (re-find #"2009/148" (:hazmat-survey-basis sb)))
     (is (re-find #"eur-lex\.europa\.eu" (:hazmat-survey-provenance sb)))
     (is (re-find #"TRGS 519|GefStoffV|Gefahrstoffverordnung" (:hazmat-survey-basis sb)))))
+
+(deftest gbr-cites-real-car-2012-and-cdm-2015-and-building-act-1984
+  (let [sb (facts/spec-basis "GBR")]
+    (is (re-find #"Control of Asbestos Regulations 2012" (:hazmat-survey-basis sb)))
+    (is (re-find #"reg\.5|regulation/5" (:hazmat-survey-basis sb)))
+    (is (re-find #"legislation\.gov\.uk/uksi/2012/632/regulation/5" (:hazmat-survey-provenance sb)))
+    (is (re-find #"Construction \(Design and Management\) Regulations 2015" (:demolition-notification-basis sb)))
+    (is (re-find #"reg\.20" (:demolition-notification-basis sb)))
+    (is (re-find #"legislation\.gov\.uk/uksi/2015/51/regulation/20" (:demolition-notification-provenance sb)))
+    (is (re-find #"Building Act 1984" (:permit-basis sb)))
+    (is (re-find #"legislation\.gov\.uk/ukpga/1984/55/section/80" (:permit-provenance sb)))
+    (is (re-find #"England and Wales" (:permit-note sb)) "honestly scoped to England & Wales, not all of the UK")))
 
 (deftest uncovered-jurisdiction-has-no-fabricated-catalog-entry
   (is (nil? (facts/spec-basis "ATL"))))
