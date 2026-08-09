@@ -1,0 +1,614 @@
+(ns demolition.render-html
+  "Build-time HTML renderer for `docs/samples/operator-console.html`.
+
+  Closes flagship checklist item 2: this repo had a `docs/index.html`
+  product face but NO operator-console demo page and no generator at all.
+
+  EVERY value on the generated page is REAL output of this repo's own
+  actor stack, produced at build time by actually executing it:
+
+    `demolition.store/seed-db`  -> the real seeded site directory
+    `demolition.operation/build`-> the real langgraph-clj StateGraph actor
+    `demolition.advisor`        -> the real (mock, deterministic) advisor
+    `demolition.governor/check` -> the real independent censor
+    `demolition.phase/gate`     -> the real rollout-phase gate
+    `demolition.notify`         -> the real mock Notifier transport
+    `demolition.facts`          -> the real per-jurisdiction legal catalog
+
+  Nothing on the page is hand-typed domain data. The site rows are read
+  back out of the store AFTER the run (so they show the ground truth the
+  run actually left behind), the ledger/history tables are the store's
+  own append-only collections, the action-gate table is DERIVED from the
+  live `demolition.governor/closed-op-allowlist` /
+  `demolition.governor/high-stakes` / `demolition.phase/phases` values
+  (and, for the soft cost gate, by actually probing
+  `demolition.governor/check` either side of
+  `supply-order-cost-threshold-usd`) rather than described in prose, so
+  the page cannot drift away from the code, and the jurisdiction table is
+  `demolition.facts/catalog` + `demolition.facts/coverage` verbatim.
+
+  DETERMINISTIC: no timestamps, no randomness, no wall-clock anything in
+  the page content -- set iteration is sorted before rendering. Two
+  consecutive runs are byte-identical (verify with `diff`).
+
+  Usage: `clojure -M:dev:render-html [out-file]`
+  (default `docs/samples/operator-console.html`)."
+  (:require [clojure.string :as str]
+            [jp-go-dds.skin]
+            [langgraph.graph :as g]
+            [demolition.advisor :as advisor]
+            [demolition.facts :as facts]
+            [demolition.governor :as governor]
+            [demolition.notify :as notify]
+            [demolition.operation :as op]
+            [demolition.phase :as phase]
+            [demolition.store :as store]))
+
+(def ^:private operator
+  {:actor-id "op-1" :actor-role :site-supervisor :phase phase/default-phase})
+
+(defn- exec! [actor tid request]
+  (g/run* actor {:request request :context operator} {:thread-id tid}))
+
+(defn- approve! [actor tid]
+  (g/run* actor {:approval {:status :approved :by "op-1"}}
+          {:thread-id tid :resume? true}))
+
+(defn- fixed-advisor
+  "An `demolition.advisor/Advisor` that always returns `proposal`.
+
+  Used ONLY for the compromised-advisor probes below: checks 2 and 3 of
+  the Demolition Governor (`:effect` must be `:propose`; no equipment-
+  control / direct-actuation / engineering-plan-finalization marker) are
+  defense-in-depth against an advisor that has been compromised or has
+  malfunctioned, so this repo's own well-behaved mock advisor
+  structurally cannot reach them. Injecting a hostile advisor through
+  the actor's real `:advisor` seam is the only honest way to show that
+  the governor stops it -- the hold facts those probes produce are real
+  governor output, not narration."
+  [proposal]
+  (reify advisor/Advisor
+    (-advise [_ _store _request] proposal)))
+
+(defn run-demo!
+  "Seeds a fresh store, builds the REAL OperationActor over it, and runs
+  a scenario that reaches every disposition this actor can produce.
+
+  Clean full lifecycle (site-1, JPN):
+    1. `:log-site-record`                -- AUTO-COMMITS (phase 3, clean,
+                                            no capital or safety risk)
+    2. `:schedule-demolition-operation`  -- escalates (permanently
+                                            high-stakes) -> human approves
+    3. `:flag-safety-concern`            -- ALWAYS escalates -> human
+                                            approves -> the safety-concern
+                                            notice is actually dispatched
+                                            over mail + phone to the
+                                            site's real contact roster
+    4. `:log-site-record`                -- logs the concern's resolution,
+                                            AUTO-COMMITS
+    5. `:schedule-demolition-operation`  -- re-proposed now the concern is
+                                            resolved -> approved
+    6. `:order-supplies` (1200 USD)      -- below the cost threshold,
+                                            AUTO-COMMITS
+    7. `:order-supplies` (18000 USD)     -- above the cost threshold,
+                                            escalates -> approved
+  Cross-jurisdiction lifecycles: site-7 (USA, :quantitative, 12 days vs
+  the 10-working-day NESHAP minimum) and site-8 (DEU/EU, :qualitative --
+  no numeric lead time is ever fabricated) both escalate and are approved.
+
+  HARD governor holds -- none of these ever reaches a human:
+    site-2  :no-legal-basis                    (ATL is not in the catalog)
+    site-3  :site-not-verified + :hazmat-survey-incomplete
+    site-4  :hazmat-survey-incomplete
+    site-5  :notification-lead-time-insufficient (2 days < JPN's 7)
+    site-6  :unresolved-safety-concern
+    site-1  :unknown-op                        (op outside the closed
+                                                four-op allowlist)
+    site-1  :effect-not-propose                (compromised-advisor probe)
+    site-1  :forbidden-action-class            (compromised-advisor probe)
+
+  Every subject id above is a real key of `demolition.store/demo-data`
+  (checked against the store before the scenario was written).
+
+  Returns `{:db <store> :notifier <mock notifier>}` -- everything
+  `render` puts on the page is read back out of these."
+  []
+  (let [db (store/seed-db)
+        notifier (notify/mock-notifier)
+        actor (op/build db {:notifier notifier})]
+
+    ;; --- site-1: the full clean lifecycle -------------------------------
+    (exec! actor "t1" {:op :log-site-record :subject "site-1"
+                       :patch {:id "site-1" :hazmat-detected? false}})
+
+    (exec! actor "t2" {:op :schedule-demolition-operation :subject "site-1"
+                       :window {:proposed-start-date "2026-08-01"
+                                :proposed-end-date "2026-08-15"}
+                       :notes "外壁先行解体、その後内部解体"})
+    (approve! actor "t2")
+
+    (exec! actor "t3" {:op :flag-safety-concern :subject "site-1"
+                       :concern-type :structural-instability
+                       :concern-description "南側外壁に亀裂を確認、崩落リスクの可能性。"})
+    (approve! actor "t3")
+
+    (exec! actor "t4" {:op :log-site-record :subject "site-1"
+                       :patch {:id "site-1" :safety-concern-unresolved? false}})
+
+    (exec! actor "t5" {:op :schedule-demolition-operation :subject "site-1"
+                       :window {:proposed-start-date "2026-08-08"
+                                :proposed-end-date "2026-08-22"}
+                       :notes "亀裂対応工法を反映した改訂スケジュール"})
+    (approve! actor "t5")
+
+    (exec! actor "t6" {:op :order-supplies :subject "site-1"
+                       :items ["disposal-container-20yd" "dust-suppression-water"]
+                       :cost-usd 1200 :vendor "Local Disposal Co."})
+
+    (exec! actor "t7" {:op :order-supplies :subject "site-1"
+                       :items ["mobile-crusher-rental"]
+                       :cost-usd 18000 :vendor "Heavy Equip Rentals"})
+    (approve! actor "t7")
+
+    ;; --- HARD holds: each never reaches a human --------------------------
+    (exec! actor "t8"  {:op :schedule-demolition-operation :subject "site-2" :window {}})
+    (exec! actor "t9"  {:op :schedule-demolition-operation :subject "site-3" :window {}})
+    (exec! actor "t10" {:op :schedule-demolition-operation :subject "site-4" :window {}})
+    (exec! actor "t11" {:op :schedule-demolition-operation :subject "site-5" :window {}})
+    (exec! actor "t12" {:op :schedule-demolition-operation :subject "site-6" :window {}})
+    (exec! actor "t13" {:op :direct-equipment-command :subject "site-1"})
+
+    ;; --- cross-jurisdiction lifecycles ----------------------------------
+    (exec! actor "t14" {:op :schedule-demolition-operation :subject "site-7"
+                        :window {:proposed-start-date "2026-09-01"
+                                 :proposed-end-date "2026-09-20"}})
+    (approve! actor "t14")
+
+    (exec! actor "t15" {:op :schedule-demolition-operation :subject "site-8"
+                        :window {:proposed-start-date "2026-09-10"
+                                 :proposed-end-date "2026-09-25"}})
+    (approve! actor "t15")
+
+    ;; --- compromised-advisor probes (governor checks 2 and 3) -----------
+    ;; Same store, same governor, same phase gate -- only the injected
+    ;; advisor differs. Both are HARD-held before any human sees them.
+    (-> (op/build db {:notifier notifier
+                      :advisor (fixed-advisor
+                                {:summary "site-1 解体シーケンス開始指令"
+                                 :rationale "（改竄されたアドバイザ: :effect を :propose 以外にして実作動を試みる）"
+                                 :cites ["compromised-advisor-probe"]
+                                 :effect :actuate
+                                 :value {:site-id "site-1"}
+                                 :stake :schedule-demolition-operation
+                                 :confidence 0.99})})
+        (exec! "t16" {:op :schedule-demolition-operation :subject "site-1" :window {}}))
+
+    (-> (op/build db {:notifier notifier
+                      :advisor (fixed-advisor
+                                {:summary "site-1 重機直接操作コマンドを含む発注提案"
+                                 :rationale "（改竄されたアドバイザ: :equipment-control? を立てて重機操作を試みる）"
+                                 :cites ["compromised-advisor-probe"]
+                                 :effect :propose
+                                 :value {:site-id "site-1" :equipment-control? true}
+                                 :stake :order-supplies
+                                 :confidence 0.99})})
+        (exec! "t17" {:op :order-supplies :subject "site-1"}))
+
+    {:db db :notifier notifier}))
+
+;; ----------------------------- rendering -----------------------------
+
+(defn- esc [v]
+  (-> (str v)
+      (str/replace "&" "&amp;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")
+      (str/replace "\"" "&quot;")))
+
+(defn- trunc
+  "Deterministically shorten a long cell value. Used ONLY for the ledger
+  `basis` column, whose committed rows carry full statutory citations --
+  the untruncated text of every one of them is in the jurisdiction table
+  above it on the same page."
+  [n s]
+  (let [s (str s)]
+    (if (<= (count s) n) s (str (subs s 0 n) " …"))))
+
+(defn- yes-no [v]
+  (cond (true? v)  "<span class=\"ok\">yes</span>"
+        (false? v) "<span class=\"muted\">no</span>"
+        :else      "<span class=\"warn\">unknown</span>"))
+
+(defn- kw-str
+  "Print a keyword the way the source code writes it (`:rule`, not
+  `rule`) so page text and code text match exactly."
+  [v]
+  (if (nil? v) "" (str v)))
+
+(defn- basis-str [basis]
+  (str/join " / " (map kw-str basis)))
+
+;; ----------------------------- derived gate tables -----------------------------
+
+(defn- sorted-ops
+  "The actor's closed op allowlist, from the LIVE governor value."
+  []
+  (sort-by name governor/closed-op-allowlist))
+
+(defn- sorted-phases []
+  (sort (keys phase/phases)))
+
+(defn- first-write-phase [op]
+  (first (filter #(contains? (:writes (get phase/phases %)) op) (sorted-phases))))
+
+(defn- auto-phases [op]
+  (filter #(contains? (:auto (get phase/phases %)) op) (sorted-phases)))
+
+(defn- cost-gated?
+  "Probes the REAL `demolition.governor/check` either side of
+  `supply-order-cost-threshold-usd` with an otherwise-clean,
+  high-confidence proposal for `op` against a freshly-seeded verified
+  site, and reports whether the cost alone flips the verdict to
+  high-stakes. Derived by execution, never asserted in prose."
+  [op]
+  (let [db (store/seed-db)
+        request {:op op :subject "site-1"}
+        base {:summary "" :rationale "" :cites ["probe"] :effect :propose
+              :stake nil :confidence 0.99
+              :value {:site-id "site-1" :spec-basis "probe"}}
+        verdict (fn [cost]
+                  (governor/check request operator
+                                  (assoc-in base [:value :cost-usd] cost) db))]
+    (and (not (:high-stakes? (verdict (dec governor/supply-order-cost-threshold-usd))))
+         (boolean (:high-stakes? (verdict (inc governor/supply-order-cost-threshold-usd)))))))
+
+(defn- gate-row [op]
+  (let [wp (first-write-phase op)
+        ap (auto-phases op)
+        always-human? (contains? governor/high-stakes op)]
+    (format "        <tr><td><code>%s</code></td><td class=\"num\">%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+            (esc op)
+            (esc (if wp (str "phase " wp) "—"))
+            (if (seq ap)
+              (str "<span class=\"ok\">phase " (esc (str/join ", " ap)) "</span>")
+              "<span class=\"muted\">never — always a human</span>")
+            (if always-human?
+              "<span class=\"warn\">ALWAYS — permanently high-stakes at every phase</span>"
+              "<span class=\"muted\">no</span>")
+            (str "confidence &lt; <span class=\"num\">" (esc governor/confidence-floor) "</span>"
+                 (when (cost-gated? op)
+                   (str " · <code>:cost-usd</code> &gt; <span class=\"num\">"
+                        (esc governor/supply-order-cost-threshold-usd) "</span> USD"))))))
+
+(defn- phase-row [p]
+  (let [{:keys [label writes auto]} (get phase/phases p)]
+    (format "        <tr><td class=\"num\">%s%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+            (esc p)
+            (if (= p phase/default-phase) " <span class=\"badge\">default</span>" "")
+            (esc label)
+            (if (seq writes)
+              (str/join " " (map #(str "<code>" (esc %) "</code>") (sort-by name writes)))
+              "<span class=\"muted\">—</span>")
+            (if (seq auto)
+              (str/join " " (map #(str "<code>" (esc %) "</code>") (sort-by name auto)))
+              "<span class=\"muted\">—</span>"))))
+
+;; ----------------------------- site / ledger tables -----------------------------
+
+(defn- last-fact-for [ledger site-id]
+  (last (filter #(= (:subject %) site-id) ledger)))
+
+(defn- status-cell [ledger site-id]
+  (let [f (last-fact-for ledger site-id)]
+    (case (:t f)
+      nil "<span class=\"muted\">no activity</span>"
+      :committed "<span class=\"ok\">committed</span>"
+      :approval-granted "<span class=\"ok\">approved &amp; committed</span>"
+      :governor-hold
+      (str "<span class=\"critical\">HARD hold · "
+           (esc (basis-str (:basis f))) "</span>")
+      :approval-rejected "<span class=\"warn\">rejected by approver</span>"
+      :approval-requested "<span class=\"warn\">awaiting approval</span>"
+      "<span class=\"muted\">in progress</span>")))
+
+(defn- lead-time-cell
+  "Re-runs the REAL `demolition.facts/notification-lead-insufficient?`
+  against the site's post-run ground truth -- the same three-valued
+  function the governor's HARD check 7 uses.
+
+  Note the honest distinction the source function itself draws: it
+  returns `false` both when a recorded lead time actually clears the
+  statutory minimum AND when no lead time is recorded at all (there is
+  then no arithmetic to fail). Only the first of those is 'meets
+  minimum'; the second is reported as unrecorded, because claiming
+  compliance the code never asserted would be a fabrication."
+  [{:keys [jurisdiction notification-lead-days-actual] :as site}]
+  (let [minimum (:notification-lead-days (facts/spec-basis jurisdiction))
+        verdict (facts/notification-lead-insufficient? jurisdiction site)
+        recorded? (number? notification-lead-days-actual)
+        actual (if recorded?
+                 (str "<span class=\"num\">" (esc notification-lead-days-actual) "</span> d")
+                 "<span class=\"muted\">not recorded</span>")
+        floor (if (number? minimum)
+                (str " / min <span class=\"num\">" (esc minimum) "</span> d")
+                "")]
+    (str actual floor " · "
+         (case verdict
+           true "<span class=\"critical\">insufficient</span>"
+           false (if recorded?
+                   "<span class=\"ok\">meets minimum</span>"
+                   "<span class=\"warn\">no lead time on file — the numeric check cannot fire</span>")
+           :qualitative "<span class=\"muted\">qualitative — no statutory day-count</span>"
+           "<span class=\"warn\">no spec-basis</span>"))))
+
+(defn- tally-cell
+  "Real per-site counts straight off the audit ledger -- so a site whose
+  LAST fact happens to be a hold is not mistaken for a site that never
+  got anything committed (site-1 below is exactly that case: it clears a
+  full lifecycle and is then used for the compromised-advisor probes)."
+  [ledger site-id]
+  (let [facts (filter #(= (:subject %) site-id) ledger)
+        committed (count (filter #(= :committed (:t %)) facts))
+        held (count (filter #(= :governor-hold (:t %)) facts))]
+    (str "<span class=\"ok num\">" (esc committed) "</span> committed · "
+         (if (pos? held)
+           (str "<span class=\"critical num\">" (esc held) "</span> held")
+           "<span class=\"muted num\">0</span> held"))))
+
+(defn- site-row [ledger {:keys [id name jurisdiction site-verified?
+                                hazmat-survey-completed? hazmat-detected?
+                                safety-concern-unresolved? status]
+                         :as site}]
+  (format (str "        <tr><td><code>%s</code></td><td>%s</td><td class=\"num\">%s</td>"
+               "<td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
+               "<td><code>%s</code></td><td>%s</td><td>%s</td></tr>")
+          (esc id) (esc name) (esc jurisdiction)
+          (yes-no site-verified?)
+          (yes-no hazmat-survey-completed?)
+          (yes-no hazmat-detected?)
+          (lead-time-cell site)
+          (yes-no safety-concern-unresolved?)
+          (esc status)
+          (tally-cell ledger id)
+          (status-cell ledger id)))
+
+(defn- ledger-row [{:keys [t op subject disposition basis]}]
+  (format "        <tr><td>%s</td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td><td>%s</td></tr>"
+          (case t
+            :committed "<span class=\"ok\">committed</span>"
+            :governor-hold "<span class=\"critical\">governor-hold</span>"
+            :approval-rejected "<span class=\"warn\">approval-rejected</span>"
+            (esc (kw-str t)))
+          (esc (kw-str op))
+          (esc subject)
+          (esc (kw-str disposition))
+          (esc (trunc 96 (basis-str basis)))))
+
+(defn- hold-row [{:keys [op subject confidence violations]}]
+  (format (str "        <tr><td><code>%s</code></td><td><code>%s</code></td>"
+               "<td class=\"num\">%s</td><td>%s</td></tr>")
+          (esc subject) (esc (kw-str op)) (esc confidence)
+          (str/join "<br>"
+                    (map (fn [{:keys [rule detail]}]
+                           (str "<span class=\"critical\">" (esc (kw-str rule)) "</span> — "
+                                (esc detail)))
+                         violations))))
+
+(defn- artifact-row [kind {:strs [record_id site_id jurisdiction immutable]}]
+  (format (str "        <tr><td>%s</td><td><code>%s</code></td><td><code>%s</code></td>"
+               "<td class=\"num\">%s</td><td>%s</td></tr>")
+          (esc kind) (esc record_id) (esc site_id) (esc jurisdiction)
+          (yes-no immutable)))
+
+(defn- notify-row [{:keys [status channel to subject]}]
+  (format "        <tr><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td></tr>"
+          (if (= :sent status)
+            "<span class=\"ok\">sent</span>"
+            (str "<span class=\"critical\">" (esc (kw-str status)) "</span>"))
+          (esc (kw-str channel))
+          (esc to)
+          (esc (or subject "—"))))
+
+(defn- jurisdiction-row [iso3]
+  (let [{:keys [name owner-authority threshold-model notification-lead-days
+                hazmat-survey-basis hazmat-survey-provenance
+                demolition-notification-basis demolition-notification-provenance]}
+        (facts/spec-basis iso3)]
+    (format (str "        <tr><td><code>%s</code></td><td>%s</td><td><code>%s</code></td>"
+                 "<td class=\"num\">%s</td><td>%s</td><td>%s</td></tr>")
+            (esc iso3) (esc name) (esc (kw-str threshold-model))
+            (if (number? notification-lead-days)
+              (esc notification-lead-days)
+              "<span class=\"muted\">none in law — never fabricated</span>")
+            (esc owner-authority)
+            (str "<strong>hazmat survey:</strong> " (esc hazmat-survey-basis)
+                 " <a href=\"" (esc hazmat-survey-provenance) "\">source</a><br>"
+                 "<strong>demolition notification:</strong> " (esc demolition-notification-basis)
+                 " <a href=\"" (esc demolition-notification-provenance) "\">source</a>"))))
+
+;; ----------------------------- document -----------------------------
+
+(defn render
+  "Renders the full operator-console document from the `{:db :notifier}`
+  map `run-demo!` returned. Every cell is read out of that live store /
+  notifier or derived from the live governor/phase/facts values."
+  [{:keys [db notifier]}]
+  (let [ledger (vec (store/ledger db))
+        sites (store/all-sites db)
+        holds (filter #(and (= :governor-hold (:t %)) (seq (:violations %))) ledger)
+        ;; Coverage measured against the jurisdictions actually present in
+        ;; the store, not against the catalog's own keys (which would be
+        ;; a tautological "N of N covered").
+        coverage (facts/coverage (distinct (map :jurisdiction sites)))
+        artifacts (concat
+                   (map (partial artifact-row "site-record-log")
+                        (store/site-record-log-history db))
+                   (map (partial artifact-row "schedule-proposal")
+                        (store/schedule-proposal-history db))
+                   (map (partial artifact-row "safety-concern-flag")
+                        (store/safety-concern-flag-history db))
+                   (map (partial artifact-row "supply-order-proposal")
+                        (store/supply-order-proposal-history db)))
+        notices (keep #(get % "document") (store/safety-concern-flag-history db))
+        sent (notify/sent-log notifier)]
+    (str
+     "<!DOCTYPE html>\n"
+     "<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
+     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n"
+     "<meta name=\"color-scheme\" content=\"light\"><meta name=\"theme-color\" content=\"#ffffff\">\n"
+     "<title>cloud-itonami-isic-4311 · Demolition operator console</title>\n"
+     "<style>" (jp-go-dds.skin/dds+skin) "</style></head><body>\n"
+
+     "<header class=\"bar\">\n"
+     "  <h1>Demolition of buildings and other structures (ISIC 4311) — Operator Console</h1>\n"
+     "  <span class=\"badge\">coordination-only · governor-gated · no equipment control</span>\n"
+     "</header>\n"
+
+     "<main>\n"
+
+     "  <section class=\"banner\">\n"
+     "    <p>Every number, id, status and hold reason below was produced at build time by actually running this repository's actor —\n"
+     "      <code>demolition.store</code> → <code>demolition.operation</code> (a langgraph-clj StateGraph) →\n"
+     "      <code>demolition.advisor</code> → <code>demolition.governor</code> → <code>demolition.phase</code> →\n"
+     "      <code>demolition.notify</code> — via <code>clojure -M:dev:render-html</code>.\n"
+     "      Nothing here is hand-written sample data, and the page is deterministic: two consecutive runs are byte-identical.</p>\n"
+     "    <p class=\"muted\">This actor holds NO heavy-equipment-control authority and NO structural-engineering-decision or\n"
+     "      demolition-plan-finalization authority. Every proposal it can produce carries <code>:effect :propose</code>; the\n"
+     "      Demolition Governor HARD-holds anything else. Resolution and any demolition-plan decision remain the licensed\n"
+     "      engineer / site supervisor's exclusive authority.</p>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>Sites (post-run ground truth)</h2>\n"
+     "    <p class=\"muted\">Read back out of <code>demolition.store</code> after the scenario ran, so these are the ground-truth\n"
+     "      fields the governor actually re-checks — not the advisor's self-report. The lead-time column re-runs\n"
+     "      <code>demolition.facts/notification-lead-insufficient?</code>, the same three-valued function the governor's HARD\n"
+     "      check uses.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Site</th><th>Name</th><th>Juris.</th><th>Verified</th><th>Hazmat survey</th>"
+     "<th>Hazmat found</th><th>Notification lead time</th><th>Concern open</th><th>Status</th>"
+     "<th>This run</th><th>Last op</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (map (partial site-row ledger) sites)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>Action gate (Demolition Governor × rollout phase)</h2>\n"
+     "    <p class=\"muted\">Derived from the live <code>demolition.governor/closed-op-allowlist</code>,\n"
+     "      <code>demolition.governor/high-stakes</code> and <code>demolition.phase/phases</code> values, and — for the soft cost\n"
+     "      gate — by probing <code>demolition.governor/check</code> either side of\n"
+     "      <code>supply-order-cost-threshold-usd</code>. This table is computed, not described, so it cannot drift from the code.\n"
+     "      HARD violations are never overridable by a human approver.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Op</th><th>Writable from</th><th>May auto-commit at</th>"
+     "<th>Always escalates to a human</th><th>Soft escalation triggers</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (map gate-row (sorted-ops))) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "    <p class=\"muted\">Anything outside this closed allowlist is a HARD <code>:unknown-op</code> hold.\n"
+     "      This run is executed at <strong>phase " (esc phase/default-phase) "</strong>\n"
+     "      (<code>" (esc (:label (get phase/phases phase/default-phase))) "</code>).</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Phase</th><th>Label</th><th>May write</th><th>May auto-commit</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (map phase-row (sorted-phases))) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>HARD governor holds this run (" (esc (count holds)) ")</h2>\n"
+     "    <p class=\"muted\">Each of these was stopped by <code>demolition.governor/check</code> before the actor's\n"
+     "      <code>:request-approval</code> node — <strong>no human was ever asked</strong>, and no human could have\n"
+     "      overridden them. The last two rows are compromised-advisor probes: the same store, governor and phase gate,\n"
+     "      driven through the actor's real <code>:advisor</code> injection seam with a deliberately hostile advisor, which\n"
+     "      is the only way to reach the two defense-in-depth checks this repo's own well-behaved advisor cannot trip.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Site</th><th>Op</th><th>Advisor confidence</th><th>Violated rule — detail</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (map hold-row holds)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>Coordination artifacts committed (" (esc (count artifacts)) ")</h2>\n"
+     "    <p class=\"muted\">The store's four append-only, jurisdiction-scoped record streams. Every one is a\n"
+     "      <em>proposal/log</em> artifact — none of them dispatches equipment or authorises a demolition sequence.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Stream</th><th>Record id</th><th>Site</th><th>Juris.</th><th>Immutable</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" artifacts) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>Safety-concern notice actually dispatched</h2>\n"
+     "    <p class=\"muted\">Rendered by <code>demolition.registry/render-safety-concern-notice</code> and fanned out over both\n"
+     "      channels by <code>demolition.notify/dispatch-safety-concern-notice!</code> to the site's real\n"
+     "      <code>:safety-contacts</code> roster — only after a human approved the flag, since\n"
+     "      <code>:flag-safety-concern</code> is never auto-eligible at any phase. The transport here is the deterministic\n"
+     "      mock Notifier (no network); the Resend/Twilio transports are the same injection seam.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Result</th><th>Channel</th><th>To</th><th>Subject</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (map notify-row sent)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     (str/join "\n" (map #(str "    <pre>" (esc %) "</pre>") notices)) "\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>Jurisdiction legal-basis catalog</h2>\n"
+     "    <p class=\"muted\">" (esc (:note coverage)) "</p>\n"
+     "    <p class=\"muted\">Coverage of the jurisdictions this run's sites actually live in, computed by\n"
+     "      <code>demolition.facts/coverage</code>: <strong>" (esc (:covered coverage)) " of "
+     (esc (:requested coverage)) "</strong> — covered\n"
+     "      <code>" (esc (str/join ", " (:covered-jurisdictions coverage))) "</code>, missing\n"
+     "      <code>" (esc (str/join ", " (:missing-jurisdictions coverage))) "</code>.\n"
+     "      A jurisdiction that is not in this catalog has NO spec-basis: the advisor must not invent one, and the governor\n"
+     "      HARD-holds any schedule proposal that tries — which is exactly what <code>site-2</code> shows above.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>ISO3</th><th>Name</th><th>Threshold model</th><th>Statutory lead time (days)</th>"
+     "<th>Authority</th><th>Cited basis</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (map jurisdiction-row (sort (keys facts/catalog)))) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>Audit ledger — this run (" (esc (count ledger)) " facts)</h2>\n"
+     "    <p class=\"muted\">The store's append-only decision-fact log, in order. Long statutory citations in the basis column\n"
+     "      are shortened for width only — every one of them appears in full in the jurisdiction table above.</p>\n"
+     "    <table>\n"
+     "      <thead><tr><th>Fact</th><th>Op</th><th>Site</th><th>Disposition</th><th>Basis</th></tr></thead>\n"
+     "      <tbody>\n"
+     (str/join "\n" (map ledger-row ledger)) "\n"
+     "      </tbody>\n"
+     "    </table>\n"
+     "  </section>\n"
+
+     "</main>\n"
+     "<footer>\n"
+     "  <p>Generated by <code>demolition.render-html</code> (<code>clojure -M:dev:render-html</code>) from a fresh\n"
+     "    <code>demolition.store/seed-db</code>. Deterministic — no timestamps, no randomness. Regenerate to refresh.</p>\n"
+     "</footer>\n"
+     "</body></html>\n")))
+
+(defn -main [& args]
+  (let [out (or (first args) "docs/samples/operator-console.html")
+        {:keys [db] :as run} (run-demo!)
+        html (render run)]
+    (.mkdirs (java.io.File. (or (.getParent (java.io.File. ^String out)) ".")))
+    (spit out html)
+    (println "wrote" out
+             "(" (count (store/ledger db)) "ledger facts,"
+             (count (store/site-record-log-history db)) "site-record-log,"
+             (count (store/schedule-proposal-history db)) "schedule-proposals,"
+             (count (store/safety-concern-flag-history db)) "safety-concern-flags,"
+             (count (store/supply-order-proposal-history db)) "supply-order-proposals )")))
