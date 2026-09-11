@@ -1,5 +1,5 @@
 (ns demolition.sim
-  "Demo driver -- `clojure -M:dev:run`. Walks demolition sites through a
+  "Demo driver -- `kbb -M:dev:run`. Walks demolition sites through a
   full coordination episode, exercising every governor check: log a site
   record (auto-commits) -> propose a demolition-operation schedule
   (escalates, human approves) -> flag a safety concern (ALWAYS escalates,
